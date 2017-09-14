@@ -14,17 +14,9 @@ function krsa_ta_csv_menu() {
 function krsa_ta_csv() {
   
   $url_base = 'https://www.kretinga.lt';
-  
   $url_of_all_tarspr = 'https://www.kretinga.lt/node/251';
-
-  //$html_obj = new simple_html_dom();
-
-  //$html_obj->load(curl($url_of_all_tarspr));
   $html_obj = file_get_html($url_of_all_tarspr);
-
   $node_html_obj = $html_obj->getElementById("node-251");
-  
-  //kpr($node_html_obj->find('li.leaf a'));
   
   $links = array();
   foreach($node_html_obj->find('li.leaf a') as $link) {
@@ -33,42 +25,9 @@ function krsa_ta_csv() {
     $all_ta_info[] = _get_ta_rows_content($url);
   }
   
-  // kpr($all_ta_info);
+  $parsed_data = _parse_all_ta_info($all_ta_info);
+  kpr($parsed_data);
   
-  // search for paragraphs without links and div
-  // and add info to arrays
-  $div_arr = array();
-  $without_a_arr = array();
-  foreach($all_ta_info as $key => $ta_per_month) {
-    $count_div = count($ta_per_month['div']);
-    $count_a = count($ta_per_month['a']);
-    $count_p = count($ta_per_month['p']);
-    if ($count_div > 0) {
-      $div_arr[$key] = $count_div;
-    }
-    if ($count_p > $count_a) {
-      $total_diff = $count_p - $count_a;
-      
-      $tmp_a = array();
-      foreach ($ta_per_month['a'] as $item_a) {
-        $tmp_a[] = $item_a['title'];
-      }
-      
-      $items_without_link = array_diff($ta_per_month['p'], $tmp_a);
-      $without_a_arr[$key] = array(
-        'diff' => $total_diff, 'diff_ta' => $items_without_link
-        );
-    }
-  }
-  
-  kpr($div_arr);
-  kpr($without_a_arr);
-  
-  // test one link with one months documents
-  //echo(var_dump(($rows[40]->getAllAttributes())));
-  //echo $html_obj->getElementById("node-251");
-  //echo $html_obj;
-  //kpr($html_obj);
   // Release resources to avoid memory leak in some versions.
   $html_obj->clear();
   unset($html_obj);
@@ -76,6 +35,69 @@ function krsa_ta_csv() {
   return 'TEST';
 }
 
+/**
+ * Function parse raw array data from crawler to strict structure:
+ * - new row per month / crawled page
+ * - each sub row can be main document or extra document (attachment to main doc)
+ * - each document can have link to file or link can be empty
+ * - each document must have title
+ * @param array $all_ta_info - multidimensional array of scrapped tables rows
+ * @return array - multidimensional parsed structured array
+ */
+function _parse_all_ta_info($all_ta_info) {
+
+  $parsed_data = array();
+  foreach($all_ta_info as $key => $ta_per_month) {
+    $count_a = count($ta_per_month['a']);
+    $count_p = count($ta_per_month['p']);
+    
+    $ta_per_month_result = $ta_per_month['a'];
+    if ($count_p > $count_a) {
+      // if some records don't have links to file
+      
+      $tmp_a = array();
+      foreach ($ta_per_month['a'] as $item_a) {
+        $tmp_a[] = $item_a['title'];
+      }
+      
+      // create array with records without links
+      $arr1 = $ta_per_month['p'];
+      $arr2 = $tmp_a;
+      $without_links_arr = _array_diff_by_str_val($arr1, $arr2);
+      
+      // insert records without links in array whose records are only with links
+      foreach ($without_links_arr as $index => $value) {
+        array_splice($ta_per_month_result, $index, 0, array($value));
+      }
+    } else {
+      // all records have links - nothing to do.      
+    }
+    $parsed_data[$key] = $ta_per_month_result;
+  }
+  return $parsed_data;
+}
+
+// create array with records without links
+// similar to array_diff()
+function _array_diff_by_str_val($arr1, $arr2) {
+  $pos_shift = 0;
+  $array_diff = array();
+  foreach ($arr1 as $pos => $item) {
+    if (isset($arr2[$pos + $pos_shift])) {
+      if (!($item == $arr2[$pos + $pos_shift])) {
+        $array_diff[$pos] = array('title' => $item, 'href' => '');
+        $pos_shift--;
+      }
+    }
+    else {
+      $array_diff[$pos] = array('title' => $item, 'href' => '');
+    }
+  }
+  return $array_diff;
+}
+
+// get documents list from one page (T2 case one page = one months)
+// table rows are splitted by <a> and <p> tags and recorded to array fiels
 function _get_ta_rows_content($url) {
   $html_obj_ta_page = file_get_html($url);
   $node_html_obj_ta = $html_obj_ta_page->getElementById("main-inner");
@@ -84,7 +106,7 @@ function _get_ta_rows_content($url) {
   
   $rows = array();
   foreach($table_rows_a as $row) {
-    $title = $row->plaintext; //->find('tr');
+    $title = trim(str_replace('&nbsp;', ' ', $row->plaintext));
     $link = $row->href;
     $rows[] = array('title' => $title, 'href' => $link);
   }
@@ -93,37 +115,12 @@ function _get_ta_rows_content($url) {
   
   $rows_p = array();
   foreach($table_rows_p as $row) {
-    $title = $row->plaintext; //->find('tr');
+    $title = trim(str_replace('&nbsp;', ' ', $row->plaintext)); //->find('tr');
     $rows_p[] = $title;
   }
-  
-  $table_rows_div = $node_html_obj_ta->find('table.spr tr.tablerow div');
-  
-  $rows_div = array();
-  foreach($table_rows_div as $row) {
-    $title = $row->plaintext; //->find('tr');
-    $rows_div[] = $title;
-  }
-  
-  //echo count($rows);
-  
-  
-  //kpr(str_get_html($rows[0]));
-//  kpr($rows);
-//  kpr($rows_p);
-//  kpr($rows_div);
   
   $html_obj_ta_page->clear();
   unset($html_obj_ta_page);
   
-  return array('a' => $rows, 'p' => $rows_p, 'div' => $rows_div);
-}
-
-function curl($url) {
-  $ch = curl_init();  // Initialising cURL
-  curl_setopt($ch, CURLOPT_URL, $url);    // Setting cURL's URL option with the $url variable passed into the function
-  curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE); // Setting cURL's option to return the webpage data
-  $data = curl_exec($ch); // Executing the cURL request and assigning the returned data to the $data variable
-  curl_close($ch);    // Closing cURL
-  return $data;   // Returning the data from the function
+  return array('a' => $rows, 'p' => $rows_p);
 }
