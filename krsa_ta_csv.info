@@ -1,0 +1,4 @@
+name = KRSA TA to CSV
+description = TA to CSV
+package = KRSA
+core = 7.x
