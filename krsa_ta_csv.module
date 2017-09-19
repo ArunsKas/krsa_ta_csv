@@ -22,46 +22,23 @@ function krsa_ta_csv_menu() {
     'access arguments' => array(true),
     'type' => MENU_CALLBACK,
   );
+  $items['ta_csv/parce_last_csv'] = array(
+    'page callback' => '_parse_all_ta_info2',
+    'access arguments' => array(true),
+    'type' => MENU_CALLBACK,
+  );
   return $items;
 }
 
 function krsa_ta_csv() {
   
-  $path = variable_get('file_public_path', conf_path() . '/files');
-  $mask = '/^\w*.csv/';
-  $csv_files = file_scan_directory($path, $mask);
   $scrap_link = l(t('Scrap again'), 'ta_csv/scrap/update_t2');
   
-  return $scrap_link . ' ' . _csv_files_table();
+  $parce_link = l(t('Parse last scraped csv'), 'ta_csv/parce_last_csv');
+    
+  //_parse_all_ta_info2();
   
-  kpr($csv_files);
-  
-  if (false && !$csv_files) {
-    // if csv file not found then generate new csv file
-    
-  } else {
-    // load csv file and parse data to one line per doc with attachments
-    $csv_uri = array_shift($csv_files)->uri;
-    $handle = fopen($csv_uri, 'r');
-    $row = fgetcsv($handle);
-    $columns = array();
-    foreach ($row as $i => $header) {
-      $columns[$i] = strtolower(trim($header));
-    }
-    $csv_rows = array();
-    while ($row = fgetcsv($handle)) {
-      $csv_row = array();
-      foreach ($row as $i => $field) {
-        $csv_row[$columns[$i]] = $field;
-      }
-      $csv_rows[] = $csv_row;
-    }
-    
-    _parse_all_ta_info2($csv_rows);
-    
-  }
-
-  return 'TEST';
+  return $scrap_link . ' <br />' . $parce_link . ' ' . _csv_files_table();
 }
 
 /**
@@ -106,17 +83,52 @@ function referer_path() {
 }
 
 function _krsa_ta_csv_delete($fid) {
-  kpr($fid);
   $referer = referer_path();
   $file = file_load($fid);
   file_delete($file);
   drupal_goto($referer);
 }
 
-function _parse_all_ta_info2($rows) {
+function _parse_all_ta_info2() {
+  $referer = referer_path();
+  $public_path = variable_get('file_public_path', conf_path());
+  $path = $public_path . '/csv';
+  $mask = '/^t2-scrap.*.csv$/';
+  $csv_files = file_scan_directory($path, $mask);  
+  
+  $files_objects_arr = array();
+  foreach ($csv_files as $file) {
+    $uri = 'public://' . ltrim($file->uri, $public_path);
+    if ($file_obj = _file_load_by_uri($uri)) {
+      $files_objects_arr[] = $file_obj;
+    }
+  }
+
+  // sort by last update time
+  uasort($files_objects_arr, '__sort_callback');
+  
+  $newest_csv_uri = array_values($files_objects_arr)[0]->uri;
+  
+  // load csv file and parse data to one line per doc with attachments
+  $csv_uri = $newest_csv_uri;
+  $handle = fopen($csv_uri, 'r');
+  $row = fgetcsv($handle);
+  $columns = array();
+  foreach ($row as $i => $header) {
+    $columns[$i] = strtolower(trim($header));
+  }
+  $csv_rows = array();
+  while ($row = fgetcsv($handle)) {
+    $csv_row = array();
+    foreach ($row as $i => $field) {
+      $csv_row[$columns[$i]] = $field;
+    }
+    $csv_rows[] = $csv_row;
+  }
+
   $result = array();
   $attached_doc = array();
-  foreach($rows as $key => $row) {
+  foreach($csv_rows as $key => $row) {
     $title = $row['title'];
     if (_similar_to_main_doc($title)) {
       // if new main doc started then first write previous doc with attach to 
@@ -131,7 +143,97 @@ function _parse_all_ta_info2($rows) {
     }    
   }
   _parse_all_ta_info2_write($main_doc, $attached_doc, $result);
-  kpr($result);
+  _write_parsed_to_csv($result);
+  drupal_goto($referer);
+}
+
+function _write_parsed_to_csv($data) {
+  
+  // prepare data for writing to csv
+  // calculate max attachment amount for header line formatting
+  $count = 0;
+  $max_attach_amount = 0;
+  foreach($data as $key => $row) {
+    if ($row['attach']) {
+      if (count($row['attach']) > $max_attach_amount) {
+        $max_attach_amount = count($row['attach']);
+      }
+      $count++;
+    }
+  }
+  
+  // prepare header line
+  $csv_header = array(
+    'DocNo',
+    'DocDate',
+    'DocTitle',
+    'DocLink',
+  );
+  for ($i = 1; $i <= $max_attach_amount; $i++) {
+    array_push($csv_header, ('Attach' . $i));
+    array_push($csv_header, ('Link' . $i));
+  }
+  
+  // prepare other lines
+  $prepared_lines = array();
+  $prepared_row = array();
+  foreach($data as $i => $row) {
+    $prepared_row = array(
+      $row['no'],
+      $row['docdate'],
+      $row['title'],
+      $row['main']['link'],
+    );
+    for ($i = 0; $i < $max_attach_amount; $i++) {
+      if ($row['attach'] && (isset($row['attach'][$i]))) {
+        array_push($prepared_row, $row['attach'][$i]['title']);
+        array_push($prepared_row, $row['attach'][$i]['link']);
+      }
+    }
+    $prepared_lines[] = $prepared_row;
+  }
+  
+  
+  // write data to csv
+  $path = 'public://csv/';
+  $filename = 't2-parsed-output.csv';
+  // Ensure the directory
+  if (!file_prepare_directory($path, FILE_CREATE_DIRECTORY)) {
+    drupal_set_message(t('Unable to create directory in file system. Check permissions and try again.'), 'error');
+    return;
+  }
+  // Ensure the file
+  $file = file_save_data('', $path . $filename);
+  if (!$file) {
+    drupal_set_message(t('Unable to write to file system. Check permissions and try again.'), 'error');
+    return;
+  }
+  // Stream data - This is a simplified example. Better to do it in a batch if you have a high volume of data
+  $fh = fopen($file->uri, 'w');
+  if (!$fh) {
+    drupal_set_message(t('Unable open file for writing. Check permissions and try again.'), 'error');
+    return;
+  }
+  
+  // write header line to csv file
+  fputcsv($fh, $csv_header);
+
+  // write other lines to csv file
+  foreach ($prepared_lines as $prepared_line) {
+    fputcsv($fh, $prepared_line);
+  }
+
+  fclose($fh);
+  
+  // Notify the filesystem of the size change
+  $file->filesize = filesize($file->uri);
+  file_save($file);
+  
+  // Tell the user where we stuck it
+  drupal_set_message( t('New csv file: <a href="!url">!filename</a>.', array(
+    '!url' => file_create_url($file->uri),
+    '!filename' => $filename,
+  )));
 }
 
 function _csv_files_table() {
@@ -139,7 +241,6 @@ function _csv_files_table() {
   $path = $public_path . '/csv';
   $mask = '/\.csv$/';
   $csv_files = file_scan_directory($path, $mask);  
-  kpr($csv_files);
   
   $header = array(
     array('data' => t('Filename')),
@@ -172,7 +273,12 @@ function _csv_files_table() {
       $operations = l(t('delete'), 'ta_csv/delete/' . $file_obj->fid);
     }
     else {
-      $operations = '';
+      preg_match('/^t2-parsed.*.csv$/', $filename, $matches);
+      if ($matches && $matches[0]) {
+        $operations = l(t('delete'), 'ta_csv/delete/' . $file_obj->fid);
+      } else {
+        $operations = '';
+      }
     }
 
     $rows[] = array(
@@ -226,6 +332,7 @@ function _parse_all_ta_info2_write($main_doc, $attached_doc, &$result) {
 
   $result[$date_valid . ' ' . $doc_no] = array(
     'no' => $doc_no,
+    'docdate' => $date_valid,
     'title' => $doc_title,
     'main' => $main_doc,
     'attach' => $attached_doc);
@@ -257,6 +364,9 @@ function _get_doc_title($txt, $doc_no) {
   $title = _fix_quotes($title);
   
   $title = check_plain($title);
+  
+  // remove double and more spaces 
+  $title = preg_replace("/ {2,}/", " ", $title);
   
   return $title;
 }
@@ -420,10 +530,8 @@ function _write_to_csv($data) {
   // Notify the filesystem of the size change
   $file->filesize = filesize($file->uri);
   file_save($file);
-  $file->filesize = filesize($file->uri);
-  file_save($file);
   // Tell the user where we stuck it
-  drupal_set_message( t('Export complete. <a href="!url">!filename</a>.', array(
+  drupal_set_message( t('New csv file: <a href="!url">!filename</a>.', array(
     '!url' => file_create_url($file->uri),
     '!filename' => $filename,
   )));
