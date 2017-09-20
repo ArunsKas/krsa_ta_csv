@@ -339,6 +339,10 @@ function _parse_all_ta_info2_write($main_doc, $attached_doc, &$result) {
 }
 
 function _get_doc_title($txt, $doc_no) {
+
+  // replace tab to space
+  $txt = str_replace("\t", " ", $txt);
+  
   $doc_no_len = strlen($doc_no);
   $doc_no_pos = strpos($txt, $doc_no);
   $txt_len = strlen($txt);
@@ -352,6 +356,14 @@ function _get_doc_title($txt, $doc_no) {
   $title = htmlspecialchars_decode($title);
   
   $title = decode_entities($title);
+  // remove double and more spaces 
+  $title = preg_replace("/ {2,}/", " ", $title);
+  // remove string '(neskelbiamas)' from end
+  $title = str_replace('(neskelbiamas)', '', $title);
+  
+  // remove spaces from start and end
+  $title = trim($title);
+  
   // remove start german quote
   $title = trim($title, '„');
   // remove end german quote
@@ -359,14 +371,13 @@ function _get_doc_title($txt, $doc_no) {
   // remove double quote '"' from start and end
   $title = trim($title, '"');
   
+  // replace ' " ' (space double quote space) to '" '
+  $title = str_replace(' " ', '" ', $title);
   
   // fix number of open close quotes  
   $title = _fix_quotes($title);
   
-  $title = check_plain($title);
-  
-  // remove double and more spaces 
-  $title = preg_replace("/ {2,}/", " ", $title);
+  //$title = check_plain($title);
   
   return $title;
 }
@@ -382,14 +393,32 @@ function _fix_quotes($text) {
   $q3 = '“';
   $pos_q1 = strpos($text, $q1);
   if ($pos_q1) {
-    // convert all quotes to q1 type
+    // convert all quotes to q1 type if quote of q1 type found in string
     $text = str_replace($q2, $q1, $text);
     $text = str_replace($q3, $q1, $text);
     $count_q1 = substr_count($text, $q1);
     if ($count_q1 % 2 <> 0) {
       // append q1 to end of string
       $text = $text . $q1;
-    } 
+    } else {
+      // check requirement and add missing quote at end if needed
+      $open_q1_count = substr_count($text, ' "');
+      $total_q1_count = substr_count($text, '"');
+      if ($total_q1_count - $open_q1_count < $open_q1_count) {
+        $text = $text . $q1;
+      }
+    }
+    
+    // replace all ' "' to opening quote
+    $text = str_replace(' "', ' '.$q2, $text);
+    // replace all '" ' to closing quote
+    $text = str_replace('" ', $q3. ' ', $text);
+    
+    // replace all '"' at string end to closing quote
+    $last_char = substr($text, -1);
+    if ($last_char == '"') {
+      $text = substr($text, 0, -1).$q3;  
+    }
   } else {
     $count_q2 = substr_count($text, $q2);
     $count_q3 = substr_count($text, $q3);
@@ -398,6 +427,21 @@ function _fix_quotes($text) {
       $text = $text . $q3;
     }
   }
+  
+//  $space_q1_pos = strpos($text, ' "');
+//  $space_q1_count = substr_count($text, ' "');
+//  $quote_count = substr_count($text, '"');
+//  if (($space_q1_count >= 2) ) {
+//    dd($space_q1_count. ' ' . $text);
+//    dd($text);
+//  }
+  
+//  $pattern = '/([\s\\"]{1,})/';
+//  preg_match_all($pattern, $text, $matches);
+//  if (!empty($matches) && isset($matches[0])) {
+//    kpr($matches);
+//  }
+  
   return $text;
 }
 
