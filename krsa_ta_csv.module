@@ -139,7 +139,11 @@ function _parse_all_ta_info2() {
       $main_doc = $row;
       $attached_doc = array();
     } else {
-      $attached_doc[] = $row;
+      // clear attachment title text
+      $attached_doc[] = array(
+        'title' => _clear_text_string($row['title']),
+        'link' => $row['link']
+          );
     }    
   }
   _parse_all_ta_info2_write($main_doc, $attached_doc, $result);
@@ -348,38 +352,39 @@ function _get_doc_title($txt, $doc_no) {
   $txt_len = strlen($txt);
   // cut string from start up to doc no end
   $title = substr($txt, $doc_no_pos + $doc_no_len, $txt_len);
-  // remove spaces from start and end
-  $title = trim($title);
-  // remove dot from start and end '.'
-  $title = trim($title, '.');
-  // decode special chars like '&quot;'
-  $title = htmlspecialchars_decode($title);
   
-  $title = decode_entities($title);
-  // remove double and more spaces 
-  $title = preg_replace("/ {2,}/", " ", $title);
-  // remove string '(neskelbiamas)' from end
-  $title = str_replace('(neskelbiamas)', '', $title);
-  
-  // remove spaces from start and end
-  $title = trim($title);
-  
-  // remove start german quote
-  $title = trim($title, '„');
-  // remove end german quote
-  $title = trim($title, '“');  
-  // remove double quote '"' from start and end
-  $title = trim($title, '"');
-  
-  // replace ' " ' (space double quote space) to '" '
-  $title = str_replace(' " ', '" ', $title);
-  
-  // fix number of open close quotes  
-  $title = _fix_quotes($title);
+  $title = _clear_text_string($title);
   
   //$title = check_plain($title);
   
   return $title;
+}
+
+function _clear_text_string($text) {
+  // remove spaces from start and end
+  $text = trim($text);
+  // remove dot from start and end '.'
+  $text = trim($text, '.');
+  // decode special chars like '&quot;'
+  $text = htmlspecialchars_decode($text);
+  $text = decode_entities($text);
+  // remove double and more spaces 
+  $text = preg_replace("/ {2,}/", " ", $text);
+  // remove string '(neskelbiamas)' from end
+  $text = str_replace('(neskelbiamas)', '', $text);
+  // remove spaces from start and end
+  $text = trim($text);
+  // remove start german quote
+  $text = trim($text, '„');
+  // remove end german quote
+  $text = trim($text, '“');  
+  // remove double quote '"' from start and end
+  $text = trim($text, '"');
+  // replace ' " ' (space double quote space) to '" '
+  $text = str_replace(' " ', '" ', $text);
+  // fix number of open close quotes  
+  $text = _fix_quotes($text);
+  return $text;
 }
 
 /**
