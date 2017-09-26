@@ -1,0 +1,300 @@
+<?php
+
+global $url_base;
+$url_base = 'https://www.kretinga.lt';
+
+module_load_include('inc', 'krs_scrap', 'krs_scrap.core');
+
+function krs_scrap_menu() {
+  $items = array();
+  $items['to_csv'] = array(
+    'title' => 'TA to CSV',
+    'page callback' => 'krs_to_csv',
+    'access arguments' => array(true),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['to_csv/delete/%'] = array(
+    'page callback' => '_krs_delete',
+    'access arguments' => array(true),
+    'page arguments' => array(2),
+    'type' => MENU_CALLBACK,
+  );
+  $items['to_csv/scrap/update_t2'] = array(
+    'page callback' => '_krs_scrap_again_t2',
+    'access arguments' => array(true),
+    'type' => MENU_CALLBACK,
+  );
+  $items['to_csv/parce_last_csv'] = array(
+    'page callback' => '_parse_all_ta_info2',
+    'access arguments' => array(true),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+function krs_to_csv() {
+  
+  $scrap_link = l(t('Scrap again'), 'to_csv/scrap/update_t2');
+  
+  $parce_link = l(t('Parse last scraped csv'), 'to_csv/parce_last_csv');
+    
+  //_parse_all_ta_info2();
+  
+  return $scrap_link . ' <br />' . $parce_link . ' ' . _csv_files_table('t2');
+}
+
+/**
+ * scrap pages and write data to csv
+ * 
+ */
+function _krs_scrap_again_t2() {
+  global $url_base;
+  $referer = referer_path();
+  $url_of_all_tarspr = 'https://www.kretinga.lt/node/251';
+  $html_obj = file_get_html($url_of_all_tarspr);
+  $node_html_obj = $html_obj->getElementById("node-251");
+
+  $links = array();
+  foreach ($node_html_obj->find('li.leaf a') as $link) {
+    $url = $url_base . $link->href;
+    $links[] = $url;
+    $all_ta_info[] = _get_ta_rows_content($url);
+  }
+
+  // Release resources to avoid memory leak in some versions.
+  $html_obj->clear();
+  unset($html_obj);
+
+  $parsed_data = _parse_all_doc_info($all_ta_info);
+  _write_to_csv($parsed_data, 't2-scrap-output.csv');
+  drupal_goto($referer);
+}
+
+function _krs_delete($fid) {
+  $referer = referer_path();
+  $file = file_load($fid);
+  file_delete($file);
+  drupal_goto($referer);
+}
+
+function _parse_all_ta_info2() {
+  $referer = referer_path();
+  $public_path = variable_get('file_public_path', conf_path());
+  $path = $public_path . '/csv';
+  $mask = '/^t2-scrap.*.csv$/';
+  $csv_files = file_scan_directory($path, $mask);  
+  
+  $files_objects_arr = array();
+  foreach ($csv_files as $file) {
+    $uri = 'public://' . ltrim($file->uri, $public_path);
+    if ($file_obj = _file_load_by_uri($uri)) {
+      $files_objects_arr[] = $file_obj;
+    }
+  }
+
+  // sort by last update time
+  uasort($files_objects_arr, '__sort_callback');
+  
+  $newest_csv_uri = array_values($files_objects_arr)[0]->uri;
+  
+  // load csv file and parse data to one line per doc with attachments
+  $csv_uri = $newest_csv_uri;
+  $handle = fopen($csv_uri, 'r');
+  $row = fgetcsv($handle);
+  $columns = array();
+  foreach ($row as $i => $header) {
+    $columns[$i] = strtolower(trim($header));
+  }
+  $csv_rows = array();
+  while ($row = fgetcsv($handle)) {
+    $csv_row = array();
+    foreach ($row as $i => $field) {
+      $csv_row[$columns[$i]] = $field;
+    }
+    $csv_rows[] = $csv_row;
+  }
+
+  $result = array();
+  $attached_doc = array();
+  foreach($csv_rows as $key => $row) {
+    $title = $row['title'];
+    if (_similar_to_main_doc($title, 'tarybos sprendimas')) {
+      // if new main doc started then first write previous doc with attach to 
+      // array
+      if (isset($main_doc)) {
+        _parse_all_ta_info2_write($main_doc, $attached_doc, $result);
+      }
+      $main_doc = $row;
+      $attached_doc = array();
+    } else {
+      // clear attachment title text
+      $attached_doc[] = array(
+        'title' => _clear_text_string($row['title']),
+        'link' => $row['link']
+          );
+    }    
+  }
+  _parse_all_ta_info2_write($main_doc, $attached_doc, $result);
+  _write_parsed_to_csv($result);
+  drupal_goto($referer);
+}
+
+function _write_parsed_to_csv($data) {
+  
+  // prepare data for writing to csv
+  // calculate max attachment amount for header line formatting
+  $count = 0;
+  $max_attach_amount = 0;
+  foreach($data as $key => $row) {
+    if ($row['attach']) {
+      if (count($row['attach']) > $max_attach_amount) {
+        $max_attach_amount = count($row['attach']);
+      }
+      $count++;
+    }
+  }
+  
+  // prepare header line
+  $csv_header = array(
+    'DocNo',
+    'DocDate',
+    'DocTitle',
+    'DocLink',
+  );
+  for ($i = 1; $i <= $max_attach_amount; $i++) {
+    array_push($csv_header, ('Attach' . $i));
+    array_push($csv_header, ('Link' . $i));
+  }
+  
+  // prepare other lines
+  $prepared_lines = array();
+  $prepared_row = array();
+  foreach($data as $i => $row) {
+    $prepared_row = array(
+      $row['no'],
+      $row['docdate'],
+      $row['title'],
+      $row['main']['link'],
+    );
+    for ($i = 0; $i < $max_attach_amount; $i++) {
+      if ($row['attach'] && (isset($row['attach'][$i]))) {
+        array_push($prepared_row, $row['attach'][$i]['title']);
+        array_push($prepared_row, $row['attach'][$i]['link']);
+      }
+    }
+    $prepared_lines[] = $prepared_row;
+  }
+  
+  
+  // write data to csv
+  $path = 'public://csv/';
+  $filename = 't2-parsed-output.csv';
+  // Ensure the directory
+  if (!file_prepare_directory($path, FILE_CREATE_DIRECTORY)) {
+    drupal_set_message(t('Unable to create directory in file system. Check permissions and try again.'), 'error');
+    return;
+  }
+  // Ensure the file
+  $file = file_save_data('', $path . $filename);
+  if (!$file) {
+    drupal_set_message(t('Unable to write to file system. Check permissions and try again.'), 'error');
+    return;
+  }
+  // Stream data - This is a simplified example. Better to do it in a batch if you have a high volume of data
+  $fh = fopen($file->uri, 'w');
+  if (!$fh) {
+    drupal_set_message(t('Unable open file for writing. Check permissions and try again.'), 'error');
+    return;
+  }
+  
+  // write header line to csv file
+  fputcsv($fh, $csv_header);
+
+  // write other lines to csv file
+  foreach ($prepared_lines as $prepared_line) {
+    fputcsv($fh, $prepared_line);
+  }
+
+  fclose($fh);
+  
+  // Notify the filesystem of the size change
+  $file->filesize = filesize($file->uri);
+  file_save($file);
+  
+  // Tell the user where we stuck it
+  drupal_set_message( t('New csv file: <a href="!url">!filename</a>.', array(
+    '!url' => file_create_url($file->uri),
+    '!filename' => $filename,
+  )));
+}
+
+function _parse_all_ta_info2_write($main_doc, $attached_doc, &$result) {
+  $doc_no = _get_doc_no($main_doc['title'], 'T2');
+  $doc_y = _get_doc_year($main_doc['title']);
+  $doc_d = _get_doc_day($main_doc['title']);
+  $doc_m = _get_doc_month($main_doc['title'], $doc_y, $doc_d);
+  $doc_title = _get_doc_title($main_doc['title'], $doc_no);
+
+  $date_str = $doc_y . '-' . $doc_m . '-' . $doc_d;
+  $timestamp = strtotime($date_str);
+  // write to array only valid date format 
+  $date_valid = $timestamp ? $date_str : '';
+
+  $result[$date_valid . ' ' . $doc_no] = array(
+    'no' => $doc_no,
+    'docdate' => $date_valid,
+    'title' => $doc_title,
+    'main' => $main_doc,
+    'attach' => $attached_doc);
+}
+
+function _get_doc_title($txt, $doc_no) {
+
+  // replace tab to space
+  $txt = str_replace("\t", " ", $txt);
+  
+  $doc_no_len = strlen($doc_no);
+  $doc_no_pos = strpos($txt, $doc_no);
+  $txt_len = strlen($txt);
+  // cut string from start up to doc no end
+  $title = substr($txt, $doc_no_pos + $doc_no_len, $txt_len);
+  
+  $title = _clear_text_string($title);
+  
+  //$title = check_plain($title);
+  
+  return $title;
+}
+
+// get documents list from one page (T2 case one page = one months)
+// table rows are splitted by <a> and <p> tags and recorded to array fiels
+function _get_ta_rows_content($url) {
+  $html_obj_ta_page = file_get_html($url);
+  $node_html_obj_ta = $html_obj_ta_page->getElementById("main-inner");
+  
+  $table_rows_a = $node_html_obj_ta->find('table.spr tr.tablerow a');
+  
+  global $url_base;
+  $rows = array();
+  foreach($table_rows_a as $row) {
+    $title = trim(str_replace('&nbsp;', ' ', $row->plaintext));
+    $link = $row->href;
+    if (strlen($link) > 0) {
+      $link = $url_base . $link;
+    } 
+    $rows[] = array('title' => $title, 'href' => $link);
+  }
+  
+  $table_rows_p = $node_html_obj_ta->find('table.spr tr.tablerow p');
+  
+  $rows_p = array();
+  foreach($table_rows_p as $row) {
+    $title = trim(str_replace('&nbsp;', ' ', $row->plaintext)); //->find('tr');
+    $rows_p[] = $title;
+  }
+  
+  $html_obj_ta_page->clear();
+  unset($html_obj_ta_page);
+  
+  return array('a' => $rows, 'p' => $rows_p);
+}
