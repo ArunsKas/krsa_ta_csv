@@ -47,6 +47,94 @@ function _write_to_csv($data, $filename) {
   )));
 }
 
+function _write_parsed_to_csv($data, $register) {
+  
+  // prepare data for writing to csv
+  // calculate max attachment amount for header line formatting
+  $count = 0;
+  $max_attach_amount = 0;
+  foreach($data as $key => $row) {
+    if ($row['attach']) {
+      if (count($row['attach']) > $max_attach_amount) {
+        $max_attach_amount = count($row['attach']);
+      }
+      $count++;
+    }
+  }
+  
+  // prepare header line
+  $csv_header = array(
+    'DocNo',
+    'DocDate',
+    'DocTitle',
+    'DocLink',
+  );
+  for ($i = 1; $i <= $max_attach_amount; $i++) {
+    array_push($csv_header, ('Attach' . $i));
+    array_push($csv_header, ('Link' . $i));
+  }
+  
+  // prepare other lines
+  $prepared_lines = array();
+  $prepared_row = array();
+  foreach($data as $i => $row) {
+    $prepared_row = array(
+      $row['no'],
+      $row['docdate'],
+      $row['title'],
+      $row['main']['link'],
+    );
+    for ($i = 0; $i < $max_attach_amount; $i++) {
+      if ($row['attach'] && (isset($row['attach'][$i]))) {
+        array_push($prepared_row, $row['attach'][$i]['title']);
+        array_push($prepared_row, $row['attach'][$i]['link']);
+      }
+    }
+    $prepared_lines[] = $prepared_row;
+  }
+  
+  // write data to csv
+  $path = 'public://csv/';
+  $filename = $register .'-parsed-output.csv';
+  // Ensure the directory
+  if (!file_prepare_directory($path, FILE_CREATE_DIRECTORY)) {
+    drupal_set_message(t('Unable to create directory in file system. Check permissions and try again.'), 'error');
+    return;
+  }
+  // Ensure the file
+  $file = file_save_data('', $path . $filename);
+  if (!$file) {
+    drupal_set_message(t('Unable to write to file system. Check permissions and try again.'), 'error');
+    return;
+  }
+  // Stream data - This is a simplified example. Better to do it in a batch if you have a high volume of data
+  $fh = fopen($file->uri, 'w');
+  if (!$fh) {
+    drupal_set_message(t('Unable open file for writing. Check permissions and try again.'), 'error');
+    return;
+  }
+  
+  // write header line to csv file
+  fputcsv($fh, $csv_header);
+
+  // write other lines to csv file
+  foreach ($prepared_lines as $prepared_line) {
+    fputcsv($fh, $prepared_line);
+  }
+
+  fclose($fh);
+  
+  // Notify the filesystem of the size change
+  $file->filesize = filesize($file->uri);
+  file_save($file);
+  
+  // Tell the user where we stuck it
+  drupal_set_message( t('New csv file: <a href="!url">!filename</a>.', array(
+    '!url' => file_create_url($file->uri),
+    '!filename' => $filename,
+  )));
+}
+
 function _csv_files_table($register) {
   $public_path = variable_get('file_public_path', conf_path());
   $path = $public_path . '/csv';
@@ -248,6 +336,39 @@ function _parse_all_doc_info($all_docs_info) {
   return $parsed_data;
 }
 
+// get documents list from one page (T2 case one page = one months)
+// table rows are splitted by <a> and <p> tags and recorded to array fiels
+function _get_doc_rows_content($url) {
+  $html_obj_ta_page = file_get_html($url);
+  $node_html_obj_ta = $html_obj_ta_page->getElementById("main-inner");
+  
+  $table_rows_a = $node_html_obj_ta->find('table.spr tr.tablerow a');
+  
+  global $url_base;
+  $rows = array();
+  foreach($table_rows_a as $row) {
+    $title = trim(str_replace('&nbsp;', ' ', $row->plaintext));
+    $link = $row->href;
+    if (strlen($link) > 0) {
+      $link = $url_base . $link;
+    } 
+    $rows[] = array('title' => $title, 'href' => $link);
+  }
+  
+  $table_rows_p = $node_html_obj_ta->find('table.spr tr.tablerow p');
+  
+  $rows_p = array();
+  foreach($table_rows_p as $row) {
+    $title = trim(str_replace('&nbsp;', ' ', $row->plaintext)); //->find('tr');
+    $rows_p[] = $title;
+  }
+  
+  $html_obj_ta_page->clear();
+  unset($html_obj_ta_page);
+  
+  return array('a' => $rows, 'p' => $rows_p);
+}
+
 // create array with records without links
 // function is similar to array_diff()
 function _array_diff_by_str_val($arr1, $arr2) {
@@ -279,6 +400,24 @@ function referer_path() {
     //list(, $path) = language_url_split_prefix($url['path'], language_list());
     return $url['path'];
   }
+}
+
+function _get_doc_title($txt, $doc_no) {
+
+  // replace tab to space
+  $txt = str_replace("\t", " ", $txt);
+  
+  $doc_no_len = strlen($doc_no);
+  $doc_no_pos = strpos($txt, $doc_no);
+  $txt_len = strlen($txt);
+  // cut string from start up to doc no end
+  $title = substr($txt, $doc_no_pos + $doc_no_len, $txt_len);
+  
+  $title = _clear_text_string($title);
+  
+  //$title = check_plain($title);
+  
+  return $title;
 }
 
 /**
@@ -359,8 +498,10 @@ function _get_doc_day($txt) {
  * function to return first match of {$register}-ddd
  */
 function _get_doc_no($txt, $register) {
-  $pattern = "/\\". $register ."-([0-9]*)/";
+  $register_up = strtoupper($register);
+  $pattern = "/{$register_up}-([0-9]*)/";
   preg_match_all($pattern, $txt, $matches);
+  dd($txt);
   return $matches[0][0];
 }
 
