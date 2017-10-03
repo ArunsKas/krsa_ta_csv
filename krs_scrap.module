@@ -184,6 +184,7 @@ function _parse_all_csv_info($register) {
   }
   _parse_all_doc_info_write($main_doc, $attached_doc, $register, $result);
   _write_parsed_to_csv($result, $register);
+  _write_parsed_to_csv($result, $register, 'attach');
   drupal_goto($referer);
 }
 

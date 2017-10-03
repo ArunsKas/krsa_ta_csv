@@ -47,13 +47,21 @@ function _write_to_csv($data, $filename) {
   )));
 }
 
-function _write_parsed_to_csv($data, $register) {
+function _write_parsed_to_csv($data, $register, $format = NULL) {
+  // prepare data for writing to csv  
   
-  // prepare data for writing to csv
+// prepare header line
+  $csv_header = array(
+    'DocNo',
+    'DocDate',
+    'DocTitle',
+    'DocLink',
+  );
+
   // calculate max attachment amount for header line formatting
   $count = 0;
   $max_attach_amount = 0;
-  foreach($data as $key => $row) {
+  foreach ($data as $key => $row) {
     if ($row['attach']) {
       if (count($row['attach']) > $max_attach_amount) {
         $max_attach_amount = count($row['attach']);
@@ -61,41 +69,55 @@ function _write_parsed_to_csv($data, $register) {
       $count++;
     }
   }
-  
-  // prepare header line
-  $csv_header = array(
-    'DocNo',
-    'DocDate',
-    'DocTitle',
-    'DocLink',
-  );
+
   for ($i = 1; $i <= $max_attach_amount; $i++) {
     array_push($csv_header, ('Attach' . $i));
     array_push($csv_header, ('Link' . $i));
   }
-  
+
   // prepare other lines
   $prepared_lines = array();
   $prepared_row = array();
-  foreach($data as $i => $row) {
+  $line_arr = array();
+  foreach ($data as $i => $row) {
     $prepared_row = array(
       $row['no'],
       $row['docdate'],
       $row['title'],
       $row['main']['link'],
     );
-    for ($i = 0; $i < $max_attach_amount; $i++) {
-      if ($row['attach'] && (isset($row['attach'][$i]))) {
-        array_push($prepared_row, $row['attach'][$i]['title']);
-        array_push($prepared_row, $row['attach'][$i]['link']);
+    if ($format == 'attach') {
+      // add to array one line per one attachment
+      // add to array only lines with attachment
+      for ($i = 0; $i < $max_attach_amount; $i++) {
+        if ($row['attach'] && (isset($row['attach'][$i]))) {
+          $line_arr = $prepared_row;
+          array_push($line_arr, $row['attach'][$i]['title']);
+          array_push($line_arr, $row['attach'][$i]['link']);
+          $prepared_lines[] = $line_arr;
+        } else {
+          break;
+        }
       }
     }
-    $prepared_lines[] = $prepared_row;
+    else {
+      for ($i = 0; $i < $max_attach_amount; $i++) {
+        if ($row['attach'] && (isset($row['attach'][$i]))) {
+          array_push($prepared_row, $row['attach'][$i]['title']);
+          array_push($prepared_row, $row['attach'][$i]['link']);
+        }
+      }
+      $prepared_lines[] = $prepared_row;
+    }
   }
   
   // write data to csv
   $path = 'public://csv/';
-  $filename = $register .'-parsed-output.csv';
+  if ($format == 'attach') {
+    $filename = $register .'-parsed-output-attach.csv';
+  } else {
+    $filename = $register .'-parsed-output.csv';
+  }  
   // Ensure the directory
   if (!file_prepare_directory($path, FILE_CREATE_DIRECTORY)) {
     drupal_set_message(t('Unable to create directory in file system. Check permissions and try again.'), 'error');
@@ -198,6 +220,8 @@ function _clear_text_string($text) {
   $text = trim($text);
   // remove dot from start and end '.'
   $text = trim($text, '.');
+  // remove bullet symbol from start
+  $text = str_replace('&bull; ', '', $text);
   // decode special chars like '&quot;'
   $text = htmlspecialchars_decode($text);
   $text = decode_entities($text);
@@ -229,6 +253,12 @@ function _fix_quotes($text) {
   $q1 = '"';
   $q2 = '„';
   $q3 = '“';
+  $q4 = ',,'; // two colon as open quote
+  $pos_q4 = strpos($text, $q4);
+  if ($pos_q4) {
+    // convert ',,' to $q2
+    $text = str_replace($q4, $q2, $text);
+  }
   $pos_q1 = strpos($text, $q1);
   if ($pos_q1) {
     // convert all quotes to q1 type if quote of q1 type found in string
@@ -501,7 +531,6 @@ function _get_doc_no($txt, $register) {
   $register_up = strtoupper($register);
   $pattern = "/{$register_up}-([0-9]*)/";
   preg_match_all($pattern, $txt, $matches);
-  dd($txt);
   return $matches[0][0];
 }
 
